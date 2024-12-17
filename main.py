@@ -1,21 +1,30 @@
 import mysql.connector
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.exceptions import SpotifyException
+import time
+import sys
 import os
+from dotenv import load_dotenv
+import json
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env.py'))
 
 SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 
-MYSQL_HOST = 'host.docker.internal'
+MYSQL_HOST = os.getenv('MYSQL_HOST')
+MYSQL_PORT = os.getenv('MYSQL_PORT')
 MYSQL_USER = os.getenv('MYSQL_USER')
 MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
-MYSQL_DATABASE = 'spotify'
+MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
 
 auth_manager = SpotifyClientCredentials(client_id=SPOTIPY_CLIENT_ID, client_secret=SPOTIPY_CLIENT_SECRET)
 sp = spotipy.Spotify(auth_manager=auth_manager)
 
 conn = mysql.connector.connect(
     host=MYSQL_HOST,
+    port=MYSQL_PORT,
     user=MYSQL_USER,
     password=MYSQL_PASSWORD,
     database=MYSQL_DATABASE
@@ -24,8 +33,12 @@ cursor = conn.cursor()
 artist_insert = 0
 artist_list = []
 
+initial_id_artist = sys.argv[1]
+max_artist = int(sys.argv[2])
+
 
 def insert_artist(artist):
+    print('insert ' + artist['name'])
     global artist_insert  # Declarar que queremos usar la variable global
     artist_list.append(artist['name'])
     genres = ','.join(artist.get('genres', []))
@@ -55,26 +68,65 @@ def insert_track(track, album_id, artist_id):
     conn.commit()
 
 
-def get_info_artist_related(id_artist):
-    artist_releated = sp.artist_related_artists(id_artist)
-    print(artist_releated)
-    for artist in artist_releated:
-        #insertar en bbdd los artistas
-        if artist['name'] not in artist_list:
-            insert_artist(artist)
-        top_tracks = sp.artist_top_tracks(artist['id'], 'ES')
-        for track in top_tracks:
-            print(track)
-            #insertar en bbdd las canciones
-            album = track['album']
-            insert_album(album, artist['id'])
-            insert_track(track, album['id'], artist['id'])
-        if artist_insert != 5000:
-            get_info_artist_related(artist['id'])
+def rate_limit_control(exc):
+    if exc.http_status_code == 429:
+        retry_after = exc.headers.get('Retry-After', 5)
+        time.sleep(retry_after)
+    else:
+        raise exc
 
 
-# https://open.spotify.com/intl-es/artist/3bvfu2KAve4lPHrhEFDZna?si=cf1AGjrDSVWYegUwAIRlCg
-get_info_artist_related('3bvfu2KAve4lPHrhEFDZna')
+# Función para obtener información de artistas relacionados
+def get_info_artist_related(id_artist, artist_list, artist_insert):
+    try:
+        # Obtener artistas relacionados
+        artist_releated = sp.artist_related_artists(id_artist)
+
+        for artist in artist_releated['artists']:
+            print(f"Procesando artista: {artist['name']}")
+
+            # Verificar si el artista ya está en la lista o base de datos
+            if artist['name'] not in artist_list:
+                artist_list.append(artist['name'])  # Añadir a la lista local
+                insert_artist(artist)  # Insertar artista en la base de datos
+                artist_insert += 1
+
+                print(f"Artistas insertados: {artist_insert}")
+
+                # Pausa entre solicitudes para evitar rate limit
+                time.sleep(2)
+
+                # Obtener las canciones más populares en los países hispanohablantes
+                countries = ["AR", "BO", "CL", "CO", "CR", "CU", "DO", "EC", "ES", "SV", "GQ", "GT", "HN", "MX", "NI",
+                             "PA", "PY", "PE", "PR", "UY", "VE"]
+                top_tracks = sp.artist_top_tracks(artist['id'],
+                                                  countries)  # Se puede ajustar el mercado si es necesario
+
+                for track in top_tracks['tracks']:
+                    print(f"Insertando canción: {track['name']}")
+                    album = track['album']
+                    insert_album(album, artist['id'])  # Insertar el álbum en la base de datos
+                    insert_track(track, album['id'], artist['id'])  # Insertar la canción en la base de datos
+
+                # Limitar la cantidad de artistas a insertar
+                if artist_insert >= max_artist:
+                    print(f"Se alcanzó el límite de {max_artist} artistas insertados.")
+                    sys.exit()
+
+                # Pausa adicional entre artistas
+                time.sleep(10)
+
+                # Llamada recursiva para obtener artistas relacionados del nuevo artista
+                get_info_artist_related(artist['id'], artist_list, artist_insert)
+
+    except Exception as e:
+        print(f"Error procesando artista {id_artist}: {e}")
+        time.sleep(10)  # Esperar para evitar problemas de sobrecarga o rate limit
+
+
+# Inicia el proceso con un artista inicial (ID)
+#https://open.spotify.com/intl-es/artist/790FomKkXshlbRYZFtlgla?si=6E8DXg5AQH6-aojPQyk1Cw
+get_info_artist_related(initial_id_artist, artist_list, artist_insert)
 
 cursor.close()
 conn.close()
