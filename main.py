@@ -79,11 +79,15 @@ def rate_limit_control(exc):
 # Función para obtener información de artistas relacionados
 def get_info_artist_related(id_artist, artist_list, artist_insert):
     try:
-        # Obtener artistas relacionados
-        artist_releated = sp.artist_related_artists(id_artist)
+        # Obtener la información del artista original
+        artist_data = sp.artist(id_artist)
+        artist_name = artist_data["name"]
 
-        for artist in artist_releated['artists']:
-            print(f"Procesando artista: {artist['name']}")
+        # Buscar artistas similares usando el nombre del artista original
+        search_results = sp.search(q=artist_name, type="artist", limit=10)
+
+        for artist in search_results["artists"]["items"]:
+            print(f"Procesando artista encontrado: {artist['name']}")
 
             # Verificar si el artista ya está en la lista o base de datos
             if artist['name'] not in artist_list:
@@ -99,8 +103,7 @@ def get_info_artist_related(id_artist, artist_list, artist_insert):
                 # Obtener las canciones más populares en los países hispanohablantes
                 countries = ["AR", "BO", "CL", "CO", "CR", "CU", "DO", "EC", "ES", "SV", "GQ", "GT", "HN", "MX", "NI",
                              "PA", "PY", "PE", "PR", "UY", "VE"]
-                top_tracks = sp.artist_top_tracks(artist['id'],
-                                                  countries)  # Se puede ajustar el mercado si es necesario
+                top_tracks = sp.artist_top_tracks(artist['id'], countries)
 
                 for track in top_tracks['tracks']:
                     print(f"Insertando canción: {track['name']}")
@@ -116,12 +119,13 @@ def get_info_artist_related(id_artist, artist_list, artist_insert):
                 # Pausa adicional entre artistas
                 time.sleep(10)
 
-                # Llamada recursiva para obtener artistas relacionados del nuevo artista
+                # Llamada recursiva para obtener más artistas usando la misma técnica
                 get_info_artist_related(artist['id'], artist_list, artist_insert)
 
     except Exception as e:
         print(f"Error procesando artista {id_artist}: {e}")
         time.sleep(10)  # Esperar para evitar problemas de sobrecarga o rate limit
+
 
 
 # Inicia el proceso con un artista inicial (ID)
